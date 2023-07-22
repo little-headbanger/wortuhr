@@ -30,6 +30,7 @@ Persistent persistent;
 Brightness brightness;
 
 bool factoryReset = false;
+bool testAllWords = false;
 
 void ICACHE_RAM_ATTR cfgBtnPressed(void) {
   factoryReset = true;
@@ -259,6 +260,12 @@ void setupForNormal(void) {
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    if(factoryReset) {
+      factoryReset = false;
+      ledCtrl.clear();
+      persistent.factoryReset();
+      ESP.restart();
+    }
   }
   ledCtrl.showWlan();
   delay(1000);  // indicate the connection before switching to the time
@@ -338,6 +345,15 @@ void setupForNormal(void) {
     // Serial.println(measureJson(doc));
     serializeJson(doc, configBuffer, sizeof(configBuffer));
     request->send(200, "application/json", configBuffer);
+  });
+
+  // show every possible word for one second as a test sequence
+  server.on("/test", HTTP_GET, [](AsyncWebServerRequest *request) {
+    testAllWords = true;
+    const size_t capacity = JSON_OBJECT_SIZE(0);
+    DynamicJsonDocument doc(capacity);
+    serializeJson(doc, timedBuffer, sizeof(timedBuffer));
+    request->send(200, "application/json", timedBuffer);
   });
 
   // time and light intensity getter
@@ -444,6 +460,9 @@ void setup() {
     Serial.begin(115200);
     persistent.setup();
 
+    pinMode(14, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(14), cfgBtnPressed, FALLING);
+
     if (!strcmp(persistent.ssid().c_str(), "")) {
       setupForInitialConfig();
     } else {
@@ -452,9 +471,6 @@ void setup() {
 
     server.onNotFound(notFound);
     server.begin();
-
-    pinMode(14, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(14), cfgBtnPressed, FALLING);
 
     Serial.println("Setup done");
 }
@@ -494,29 +510,34 @@ void loop() {
     }
 
     if (mode == MODE_NORMAL) {
-      int h;
-      int m;
-      getTime(h, m);
-
-      static uint16_t lumaScale = 255;
-      if(persistent.dim().active) {
-        lumaScale = (brightness.getLumaScale() + lumaScale * (LUMA_SCALE_MOVING_AVG_WIN_SIZE - 1)) / LUMA_SCALE_MOVING_AVG_WIN_SIZE;
-        ledCtrl.setLumaScale(lumaScale);
+      if (testAllWords) {
+        testAllWords = false;
+        ledCtrl.testAllWords();
       } else {
-        ledCtrl.setLumaScale(255);
-      }
+        int h;
+        int m;
+        getTime(h, m);
 
-      static bool wasWithinActTimeWindow = false;
-      bool isWithinActTimeWindow = withinActiveTimeWindow(h, m);
-      if (isWithinActTimeWindow) 
-        ledCtrl.setClock(h, m);
-      else if (wasWithinActTimeWindow) {
-        Serial.println("now out of active time window, turning LEDs off");
-        ledCtrl.clear();
-      }
-      wasWithinActTimeWindow = isWithinActTimeWindow;
+        static uint16_t lumaScale = 255;
+        if(persistent.dim().active) {
+          lumaScale = (brightness.getLumaScale() + lumaScale * (LUMA_SCALE_MOVING_AVG_WIN_SIZE - 1)) / LUMA_SCALE_MOVING_AVG_WIN_SIZE;
+          ledCtrl.setLumaScale(lumaScale);
+        } else {
+          ledCtrl.setLumaScale(255);
+        }
 
-      //delay(250);
+        static bool wasWithinActTimeWindow = false;
+        bool isWithinActTimeWindow = withinActiveTimeWindow(h, m);
+        if (isWithinActTimeWindow) 
+          ledCtrl.setClock(h, m);
+        else if (wasWithinActTimeWindow) {
+          Serial.println("now out of active time window, turning LEDs off");
+          ledCtrl.clear();
+        }
+        wasWithinActTimeWindow = isWithinActTimeWindow;
+
+        //delay(250);
+      }
     } else {
       static unsigned int timeout = 15*60*2;
       timeout--;
